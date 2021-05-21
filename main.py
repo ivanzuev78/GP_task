@@ -1,5 +1,10 @@
-import sqlite3
+import argparse
 import json
+import os
+import sqlite3
+import sys
+from pathlib import Path
+
 import openpyxl as opx
 
 
@@ -47,67 +52,121 @@ class Stream:
         return f"Stream_{self.name}"
 
 
-con = sqlite3.connect("db.db")
-cursorObj = con.cursor()
+if __name__ == "__main__":
 
-cursorObj.execute("SELECT * FROM unit")
-all_units = cursorObj.fetchall()
+    DEFAULT_DATABASE_NAME = "db.db"
+    DEFAULT_JSON_FILENAME = "multiple_streams.json"
+    DEFAULT_CSV_FILENAME = "unused_streams.csv"
+    DEFAULT_XLSX_FILENAME = "all_units.xlsx"
 
-units = {
-    unit_id: SecondaryUnit(name, unit_id) if unit_type else ABTUnit(name, unit_id)
-    for unit_id, name, unit_type in all_units
-}
+    parser = argparse.ArgumentParser(description="Units and Streams analyser")
+    parser.add_argument(
+        "-db_file",
+        type=str,
+        help="Input database file",
+        default=DEFAULT_DATABASE_NAME,
+    )
+    parser.add_argument(
+        "-json_filename",
+        type=str,
+        help="Name of the output .json file with multiple streams",
+        default=DEFAULT_JSON_FILENAME,
+    )
+    parser.add_argument(
+        "-csv_filename",
+        type=str,
+        help="Name of the output .csv file with unused streams",
+        default=DEFAULT_CSV_FILENAME,
+    )
+    parser.add_argument(
+        "-xlsx_filename",
+        type=str,
+        help="Name of the output .xlsx file with unit streams",
+        default=DEFAULT_XLSX_FILENAME,
+    )
 
+    args = parser.parse_args()
+    print(args)
+    db_file = args.db_file
 
-cursorObj.execute("SELECT * FROM stream")
-all_streams = cursorObj.fetchall()
-
-streams = {stream_id: Stream(name, stream_id) for stream_id, name in all_streams}
-
-
-cursorObj.execute("SELECT * FROM unit_material ")
-all_unit_materials = cursorObj.fetchall()
-
-for unit_id, stream_id, feed_flag in all_unit_materials:
-    if feed_flag:
-        units[unit_id].input_stream[stream_id] = streams[stream_id]
-        streams[stream_id].add_where_to(units[unit_id])
+    if not args.json_filename.endswith(".json"):
+        json_filename = Path(args.json_filename + ".json")
     else:
-        units[unit_id].output_stream[stream_id] = streams[stream_id]
-        streams[stream_id].add_where_from(units[unit_id])
+        json_filename = Path(args.json_filename)
 
+    if not args.csv_filename.endswith(".csv"):
+        csv_filename = Path(args.csv_filename + ".csv")
+    else:
+        csv_filename = Path(args.csv_filename)
 
-cursorObj.execute("SELECT * FROM load_max  ")
-all_load_max = cursorObj.fetchall()
-cursorObj.close()
+    if not args.xlsx_filename.endswith(".xlsx"):
+        xlsx_filename = Path(args.xlsx_filename + ".xlsx")
+    else:
+        xlsx_filename = Path(args.xlsx_filename)
 
-for unit_id, load_max in all_load_max:
-    units[unit_id].set_load_max(load_max)
+    if not os.path.exists(db_file):
+        sys.stderr.write("Database doesn't exists")
+        sys.exit(-1)
 
+    con = sqlite3.connect(db_file)
+    cursorObj = con.cursor()
 
-with open("unused_streams.csv", "w") as f:
-    for stream in streams.values():
-        if not stream.where_from and not stream.where_to:
-            f.write(f"{stream.id}, {stream.name}\n")
+    cursorObj.execute("SELECT * FROM unit")
+    all_units = cursorObj.fetchall()
 
+    units = {
+        unit_id: SecondaryUnit(name, unit_id) if unit_type else ABTUnit(name, unit_id)
+        for unit_id, name, unit_type in all_units
+    }
 
-with open("multiple_streams.json", "w") as f:
-    multiple_streams = {}
-    for stream in streams.values():
-        if len(stream.where_to) > 1:
-            multiple_streams[stream.name] = [unit.name for unit in stream.where_to]
-    json.dump(multiple_streams, f, indent=4)
+    cursorObj.execute("SELECT * FROM stream")
+    all_streams = cursorObj.fetchall()
 
+    streams = {stream_id: Stream(name, stream_id) for stream_id, name in all_streams}
 
-wb = opx.Workbook()
-wb.remove(wb.active)
-for unit in units.values():
+    cursorObj.execute("SELECT * FROM unit_material ")
+    all_unit_materials = cursorObj.fetchall()
 
-    ws = wb.create_sheet(unit.name)
-    for index, input_stream in enumerate(unit.input_stream.values(), 1):
-        print(input_stream.name)
-        ws[f"A{index}"] = input_stream.name
-    for index, output_stream in enumerate(unit.output_stream.values(), 1):
-        ws[f"B{index}"] = output_stream.name
+    for unit_id, stream_id, feed_flag in all_unit_materials:
+        if feed_flag:
+            units[unit_id].input_stream[stream_id] = streams[stream_id]
+            streams[stream_id].add_where_to(units[unit_id])
+        else:
+            units[unit_id].output_stream[stream_id] = streams[stream_id]
+            streams[stream_id].add_where_from(units[unit_id])
 
-wb.save("all_units.xlsx")
+    cursorObj.execute("SELECT * FROM load_max  ")
+    all_load_max = cursorObj.fetchall()
+    cursorObj.close()
+
+    for unit_id, load_max in all_load_max:
+        units[unit_id].set_load_max(load_max)
+
+    with open(csv_filename, "w") as f:
+        for stream in streams.values():
+            if not stream.where_from and not stream.where_to:
+                f.write(f"{stream.id}, {stream.name}\n")
+
+    with open(json_filename, "w") as f:
+        multiple_streams = {}
+        for stream in streams.values():
+            if len(stream.where_to) > 1:
+                multiple_streams[stream.name] = [unit.name for unit in stream.where_to]
+        json.dump(multiple_streams, f, indent=4)
+
+    wb = opx.Workbook()
+    wb.remove(wb.active)
+    for unit in units.values():
+        ws = wb.create_sheet(unit.name)
+        for index, input_stream in enumerate(unit.input_stream.values(), 1):
+            ws[f"A{index}"] = input_stream.name
+        for index, output_stream in enumerate(unit.output_stream.values(), 1):
+            ws[f"B{index}"] = output_stream.name
+
+    try:
+        wb.save(xlsx_filename)
+    except PermissionError:
+        if os.path.exists("all_units.xlsx"):
+            sys.stderr.write(f"PermissionError: Please, close '{xlsx_filename}'")
+        else:
+            sys.stderr.write(f"PermissionError: Impossible to create '{xlsx_filename}'")
