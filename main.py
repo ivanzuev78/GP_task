@@ -93,25 +93,25 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Units and Streams analyser")
     parser.add_argument(
-        "-db_file",
+        "--db_file",
         type=str,
         help="Input database file",
         default=DEFAULT_DATABASE_NAME,
     )
     parser.add_argument(
-        "-json_filename",
+        "--json_filename",
         type=str,
         help="Name of the output .json file with multiple streams",
         default=DEFAULT_JSON_FILENAME,
     )
     parser.add_argument(
-        "-csv_filename",
+        "--csv_filename",
         type=str,
         help="Name of the output .csv file with unused streams",
         default=DEFAULT_CSV_FILENAME,
     )
     parser.add_argument(
-        "-xlsx_filename",
+        "--xlsx_filename",
         type=str,
         help="Name of the output .xlsx file with unit streams",
         default=DEFAULT_XLSX_FILENAME,
