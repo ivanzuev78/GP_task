@@ -65,12 +65,12 @@ class Stream:
         return f"Stream_{self.name}"
 
 
-def save_cursor_executor_creator(cursor, my_logger):
+def save_cursor_executor_creator(cursor_obj, logger):
     def wrapper(command):
         try:
-            cursor.execute(command)
+            cursor_obj.execute(command)
         except Exception as e:
-            my_logger.critical(
+            logger.critical(
                 f"Some problems with DB: '{e}'. Program stopped!\n"
                 f"--------------------------------------------------------------------------------"
             )
