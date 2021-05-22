@@ -1,11 +1,24 @@
 import argparse
 import json
+import logging
 import os
 import sqlite3
 import sys
 from pathlib import Path
 
 import openpyxl as opx
+
+
+def get_logger(logger_file, name=__file__, encoding="utf-8"):
+    log = logging.getLogger(name)
+    log.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(
+        "[%(asctime)s] %(filename)s:%(lineno)d %(levelname)-8s %(message)s"
+    )
+    fh = logging.FileHandler(logger_file, encoding=encoding)
+    fh.setFormatter(formatter)
+    log.addHandler(fh)
+    return log
 
 
 class Unit:
@@ -52,12 +65,31 @@ class Stream:
         return f"Stream_{self.name}"
 
 
+def save_cursor_executor_creator(cursor, my_logger):
+    def wrapper(command):
+        try:
+            cursor.execute(command)
+        except Exception as e:
+            my_logger.critical(
+                f"Some problems with DB: '{e}'. Program stopped!\n"
+                f"--------------------------------------------------------------------------------"
+            )
+            sys.exit(1)
+
+    return wrapper
+
+
 if __name__ == "__main__":
 
     DEFAULT_DATABASE_NAME = "db.db"
     DEFAULT_JSON_FILENAME = "multiple_streams.json"
     DEFAULT_CSV_FILENAME = "unused_streams.csv"
     DEFAULT_XLSX_FILENAME = "all_units.xlsx"
+    LOGGER_FILENAME = "log.txt"
+
+    my_logger = get_logger(logger_file=LOGGER_FILENAME)
+
+    my_logger.info(" Program started")
 
     parser = argparse.ArgumentParser(description="Units and Streams analyser")
     parser.add_argument(
@@ -86,7 +118,6 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    print(args)
     db_file = args.db_file
 
     if not args.json_filename.endswith(".json"):
@@ -105,29 +136,46 @@ if __name__ == "__main__":
         xlsx_filename = Path(args.xlsx_filename)
 
     if not os.path.exists(db_file):
-        sys.stderr.write("Database doesn't exists")
-        sys.exit(-1)
+        my_logger.critical("Database doesn't exists. Program stopped!")
+        sys.exit(1)
 
-    con = sqlite3.connect(db_file)
-    cursorObj = con.cursor()
+    my_logger.info(f"Connecting to database '{db_file}'")
 
-    cursorObj.execute("SELECT * FROM unit")
-    all_units = cursorObj.fetchall()
+    try:
+        con = sqlite3.connect(db_file)
+        cursor = con.cursor()
+    except Exception as e:
+        my_logger.critical("Problems with database connection. Program stopped!")
+        sys.exit(1)
 
+    save_cursor_execute = save_cursor_executor_creator(cursor, my_logger)
+
+    # Задание 1
+    my_logger.info(f"Creating unit items (task 1)")
+    save_cursor_execute("SELECT * FROM unit")
     units = {
         unit_id: SecondaryUnit(name, unit_id) if unit_type else ABTUnit(name, unit_id)
-        for unit_id, name, unit_type in all_units
+        for unit_id, name, unit_type in cursor
     }
 
-    cursorObj.execute("SELECT * FROM stream")
-    all_streams = cursorObj.fetchall()
+    # Задание 2
+    my_logger.info(f"Creating stream items (task 2)")
+    save_cursor_execute("SELECT * FROM stream")
+    streams = {stream_id: Stream(name, stream_id) for stream_id, name in cursor}
 
-    streams = {stream_id: Stream(name, stream_id) for stream_id, name in all_streams}
+    # Задание 3
+    my_logger.info(f"Querying the database with a big request (task 3)")
+    save_cursor_execute(
+        "SELECT unit.name, stream.name  FROM unit, stream, unit_material "
+        "WHERE unit_material.unit_id = unit.id AND unit_material.stream_id = stream.id "
+        "AND unit_material.feed_flag = 1 "
+    )
+    # В задании не сказано, что делать с полученным ответом на запрос, поэтому я его просто вывел
+    sys.stdout.write(str(cursor.fetchall()))
 
-    cursorObj.execute("SELECT * FROM unit_material ")
-    all_unit_materials = cursorObj.fetchall()
-
-    for unit_id, stream_id, feed_flag in all_unit_materials:
+    my_logger.info(f"Connecting units and streams")
+    save_cursor_execute("SELECT * FROM unit_material")
+    for unit_id, stream_id, feed_flag in cursor:
         if feed_flag:
             units[unit_id].input_stream[stream_id] = streams[stream_id]
             streams[stream_id].add_where_to(units[unit_id])
@@ -135,25 +183,40 @@ if __name__ == "__main__":
             units[unit_id].output_stream[stream_id] = streams[stream_id]
             streams[stream_id].add_where_from(units[unit_id])
 
-    cursorObj.execute("SELECT * FROM load_max  ")
-    all_load_max = cursorObj.fetchall()
-    cursorObj.close()
-
-    for unit_id, load_max in all_load_max:
+    save_cursor_execute("SELECT * FROM load_max")
+    for unit_id, load_max in cursor:
         units[unit_id].set_load_max(load_max)
 
-    with open(csv_filename, "w") as f:
-        for stream in streams.values():
-            if not stream.where_from and not stream.where_to:
-                f.write(f"{stream.id}, {stream.name}\n")
+    cursor.close()
 
-    with open(json_filename, "w") as f:
-        multiple_streams = {}
-        for stream in streams.values():
-            if len(stream.where_to) > 1:
-                multiple_streams[stream.name] = [unit.name for unit in stream.where_to]
-        json.dump(multiple_streams, f, indent=4)
+    # Задание 4
+    my_logger.info(f"Writing {csv_filename} file (task 4)")
+    try:
+        with open(csv_filename, "w") as f:
+            for stream in streams.values():
+                if not stream.where_from and not stream.where_to:
+                    f.write(f"{stream.id}, {stream.name}\n")
+    except PermissionError as e:
+        my_logger.warning(f"Impossible to save '{csv_filename}'. {e}")
 
+    # Задание 5
+    my_logger.info(f"Writing {json_filename} file (task 5)")
+    try:
+        with open(json_filename, "w") as file:
+            json.dump(
+                {
+                    stream.name: [unit.name for unit in stream.where_to]
+                    for stream in streams.values()
+                    if len(stream.where_to) > 1
+                },
+                file,
+                indent=4,
+            )
+    except PermissionError as e:
+        my_logger.warning(f"Impossible to save '{json_filename}'. {e}")
+
+    # Задание 6
+    my_logger.info(f"Writing {xlsx_filename} file (task 6)")
     wb = opx.Workbook()
     wb.remove(wb.active)
     for unit in units.values():
@@ -165,8 +228,10 @@ if __name__ == "__main__":
 
     try:
         wb.save(xlsx_filename)
-    except PermissionError:
-        if os.path.exists("all_units.xlsx"):
-            sys.stderr.write(f"PermissionError: Please, close '{xlsx_filename}'")
-        else:
-            sys.stderr.write(f"PermissionError: Impossible to create '{xlsx_filename}'")
+    except PermissionError as e:
+        my_logger.warning(f"Impossible to save '{xlsx_filename}'. {e}")
+
+    my_logger.info(
+        "Program finished\n"
+        "--------------------------------------------------------------------------------"
+    )
