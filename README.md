@@ -3,7 +3,7 @@
 ### Запуск
 Данный скрипт можно запускать как из любой среды разработки (например PyCharm), так и из командной строки с использованием дополнительных параметров:
 
-`python main.py -db_file -json_filename -csv_filename -xlsx_filename`
+`python main.py [--db_file] [--json_filename] [--csv_filename] [--xlsx_filename]`
 
 `--db_file` Выбор файла с базой данных (по умолчанию db.db)
 
